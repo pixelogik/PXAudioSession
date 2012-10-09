@@ -21,6 +21,11 @@
 
 #import "PXAudioSession.h"
 
+#import <AVFoundation/AVAudioSession.h>
+
+// Macro used to determine if we are on iOS >= 6.0 or not (important for audio session delegate vs. notifications)
+#define SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v)  ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
+
 @interface PXAudioSession ()
 
 /// Sets up audio session
@@ -28,6 +33,9 @@
 
 /// Trys to set category
 - (void)setCategoryTo:(NSString*)categoryString;
+
+/// Audio session interruption notification handler
+- (void)audioSessionInterruptionNotification:(NSNotification*)n;
 
 /// Indicates if audio session is active.
 @property (nonatomic, readwrite) BOOL isActive;
@@ -77,11 +85,23 @@
     // Implicitly create audio session singleton
     AVAudioSession *audioSession = [AVAudioSession sharedInstance];
     
-    // Set delegate (i know it is deprecated in iOS 6, but i am working with SDK5 deploying on iOS 5)
-    audioSession.delegate = self;
+    // For >=iOS6 Add notification handlers for audio session notifications
+    if (SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"6.0")) {
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(audioSessionInterruptionNotification:) name:AVAudioSessionInterruptionNotification object:nil];     
+    }
+    else {
+        // For pre-iOS6 Set delegate 
+        audioSession.delegate = self;
+    }
     
     // Just activate in order to find out if everything is alright (session should be active anyway).
     [self activateSession];
+}
+
+- (void)dealloc
+{
+    // Remove as observer from notification center
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 #pragma mark - Audio session state
@@ -186,12 +206,36 @@
 }
 
 - (void)endInterruptionWithFlags:(NSUInteger)flags
-{
+{    
     // Re-activate session (does not matter if it has already been re-activated by the system).
     [self activateSession];
     
     // Notifiy current delegate
     [self.delegate audioSessionEndInterruption];
+}
+
+#pragma mark - Audio session notifications 
+
+- (void)audioSessionInterruptionNotification:(NSNotification*)n
+{    
+    // Get type of interruption
+    NSNumber *typeKey = [[n userInfo] valueForKey:AVAudioSessionInterruptionTypeKey];
+    if (typeKey!=nil) {
+        // Check which type it is
+        switch ([typeKey integerValue]) {
+            case AVAudioSessionInterruptionTypeBegan:
+            {
+                [self beginInterruption];
+                break;
+            }
+            case AVAudioSessionInterruptionTypeEnded:
+            {
+                NSNumber *option = [[n userInfo] valueForKey:AVAudioSessionInterruptionOptionKey];
+                [self endInterruptionWithFlags:[option integerValue]];
+                break;
+            }
+        }
+    }    
 }
 
 @end
